@@ -119,6 +119,7 @@ class QueryResult(StrictModel):
     rows: list[dict[str, Any]] = Field(default_factory=list)
     row_count: int = 0
     summary: str | None = None
+    retrieved_tables: list[str] = Field(default_factory=list)
     attempts: int = 1
     corrections: list[CorrectionRound] = Field(default_factory=list)
     latency_ms: float = 0.0

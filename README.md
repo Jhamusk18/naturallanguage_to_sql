@@ -58,7 +58,7 @@ The back edges into the LLM are the correction loop — each carries the failing
 | psycopg 3 | PostgreSQL driver | First-class read-only transactions, SQLSTATE surfaces, connection options for `statement_timeout` |
 | PostgreSQL 16 | Demo database | Realistic e-commerce schema with comments and FKs to introspect |
 | SQLite (stdlib) | Query history | Durable persistence with zero extra dependencies |
-| uv + ruff + mypy + pytest | Toolchain | Fast installs, strict lint/type gates, 122 offline tests |
+| uv + ruff + mypy + pytest | Toolchain | Fast installs, strict lint/type gates, 127 offline tests |
 
 ## Quickstart
 
@@ -70,7 +70,7 @@ cd text-to-sql-engine
 
 make install   # uv venv + editable install with dev extras
 make demo      # fully offline: fixture schema, FakeLLM, real guardrails
-make test      # 122 tests — no network, no DB, no keys
+make test      # 127 tests — no network, no DB, no keys
 ```
 
 To run against a live PostgreSQL with the bundled e-commerce schema and seed:
@@ -91,6 +91,89 @@ curl -s localhost:8000/query \
   -H 'content-type: application/json' \
   -d '{"question": "Who are our top 3 customers by total spend?"}'
 ```
+
+## Interview demo guide
+
+### Setup and run
+
+Requires Python 3.12 and [uv](https://docs.astral.sh/uv/) (`pip install --user uv`). Commands below are for Linux/macOS shells; use WSL on Windows.
+
+```bash
+make install            # venv + dependencies, including the Streamlit UI extra
+cp .env.example .env    # optional: add OPENAI_API_KEY and DATABASE_URL
+
+# PostgreSQL, pick one:
+make db-up              # Docker (docker compose)
+make db-local           # Debian/Ubuntu without Docker (apt + sudo)
+
+# Terminal 1 - backend (http://127.0.0.1:8000, Swagger UI at /docs)
+make run
+# Terminal 2 - frontend (http://localhost:8501)
+make ui
+```
+
+With no `.env`, the backend still starts: fake LLM, fixture schema, fixture rows. `GET /healthz` and the banner at the top of the UI always show which backends are real (`llm`: `fake` or `openai`, `database`: `fixture` or `postgres`).
+
+### Fake mode vs live mode
+
+| | Fake mode (no `OPENAI_API_KEY`) | Live mode |
+|---|---|---|
+| SQL source | A fixed table of templates in `demo_data.py`, matched by question substring | OpenAI model, prompted with ranked schema cards and few-shot examples |
+| Questions answered | Only the 5 bundled questions (plus one guardrail-rejection example). Anything else is rejected with an explicit "FakeLLM has no template" error | Free-form questions about the connected schema |
+| Validation, EXPLAIN, read-only execution, correction loop | Real | Real |
+| Database | Real PostgreSQL if `DATABASE_URL` is set, otherwise fixture rows | Real PostgreSQL |
+
+Fake mode demonstrates the guardrails and execution pipeline. It is not general-purpose NL-to-SQL.
+
+### Demo questions
+
+Fake mode (all run against PostgreSQL when `DATABASE_URL` is set):
+
+1. Which 5 products have generated the most revenue?
+2. Who are our top 3 customers by total spend?
+3. How many orders are in each status?
+4. What is the average order value by country?
+5. Show me everything about our customers. (rejected: `SELECT *` over the sensitive `customers` table)
+
+Live mode (needs an API key):
+
+1. Who are our top 3 customers by total spend?
+2. Which 5 products generated the highest revenue?
+3. What is the total revenue by month?
+4. Which customers have placed more than 2 orders?
+5. Delete all cancelled orders from the database. (rejected: select-only guardrail)
+
+Note on this seed data: no customer has more than 3 orders and every product has been ordered, so "Which customers have placed more than 3 orders?" and "Which products have never been ordered?" correctly return 0 rows. Use "more than 2 orders" for a non-empty result.
+
+### Evaluation
+
+`evaluation/questions.jsonl` has 56 questions written against this schema: 43 answerable (each with a gold SQL), 6 unsafe requests, 4 that reference nonexistent columns or tables, and 3 ambiguous or invalid inputs.
+
+```bash
+make eval-oracle    # sanity check of dataset + pipeline using the gold SQL, no LLM
+make eval           # real model: needs OPENAI_API_KEY and DATABASE_URL
+```
+
+`make eval` refuses to run on the FakeLLM. Metrics: first-attempt valid SQL rate (passes guardrails and EXPLAIN), execution success rate, execution accuracy against the gold SQL's rows, correction success rate (of questions whose first attempt failed), unsafe rejection rate, and a before/after row-count check that no table changed. Per-question results are written to `artifacts/`.
+
+What has been measured so far:
+
+- `make eval-oracle` on PostgreSQL: 43/43 gold queries pass validation and execute and match themselves, 6/6 unsafe statements are rejected, and no table row count changed. This validates the dataset and the guardrails. It says nothing about model quality, because the "model" is the answer key.
+- No live-model numbers exist yet. The OpenAI code path was exercised end to end only against a scripted local stub that speaks the OpenAI HTTP API (wiring check). Run `make eval` with a real key and report those numbers as they come out.
+
+### Architecture in one paragraph
+
+A question is embedded and used to rank per-table schema cards (introspected from `pg_catalog`) and pick 3 few-shot examples; the prompt builder assembles dialect rules, cards, examples, and the question. The LLM's SQL is parsed once with sqlglot and folded through AST rules (single statement, SELECT only, table allowlist, comment stripping, LIMIT injection, sensitive-table star denial, column qualification). Validated SQL is preflighted with `EXPLAIN` and executed in a read-only transaction with a server-side timeout. Fixable errors are fed back to the model with the failing SQL for up to 2 rounds; policy errors stop immediately. The FastAPI service returns the SQL, rows, summary, retrieved tables, and the correction trace; the Streamlit app in `ui/app.py` renders them.
+
+### Limitations and future work
+
+- Live LLM accuracy is unmeasured; the evaluation set is small and uses one tiny schema (12 customers, 30 orders).
+- Schema retrieval ranks all 5 tables but the whole schema fits in the token budget, so retrieval does not filter anything on this database. It matters for wide schemas.
+- The few-shot exemplars are written for the demo schema and need to be replaced for another database.
+- The result summary is a one-sentence LLM paraphrase of metadata and the first row, not an analysis.
+- No authentication, rate limiting, or conversation memory; each question is independent.
+- The Docker path (`make db-up`) and the real OpenAI path were not run in the development environment (no Docker, no API key). The same PostgreSQL steps were run via apt on Ubuntu 24.04 and `scripts/setup_local_postgres.sh` was re-run against an existing install.
+- Ideas: execution-based self-consistency, per-column value sampling in the cards, a larger evaluation set, and streaming responses.
 
 ## Configuration
 
@@ -290,7 +373,7 @@ text-to-sql-engine/
 │   └── demo.py            # offline-first demo
 ├── db/init/               # e-commerce schema + generated deterministic seed
 ├── scripts/               # seed generator (also prints the expected answers)
-├── tests/                 # 122 offline tests
+├── tests/                 # 127 offline tests
 ├── docker-compose.yml     # postgres:16 with schema + seed auto-applied
 └── Makefile               # install / lint / type / test / demo / run / db-up
 ```
@@ -301,7 +384,7 @@ text-to-sql-engine/
 make check   # ruff + mypy (strict) + pytest
 ```
 
-122 tests run in under a second, entirely offline — no network, no database, no API keys, no model downloads. Coverage by area:
+127 tests run in under a second, entirely offline — no network, no database, no API keys, no model downloads. Coverage by area:
 
 - **Guardrails** — every rule individually and through the pipeline: rejects UPDATE/DELETE/INSERT/DDL, DML inside CTEs, `SELECT ... INTO`, row locks, multi-statements, and unknown tables (including inside subqueries); strips comments; injects and preserves LIMITs; denies sensitive stars while expanding safe ones; fully qualifies columns and rejects unknown or ambiguous ones.
 - **Correction loop** — scripted fail-then-succeed at the guardrail, EXPLAIN, and execute stages; budget exhaustion; zero-budget; immediate stop on non-retryable categories.

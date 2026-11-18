@@ -37,6 +37,9 @@ def test_offline_question_produces_validated_sql_and_summary(tmp_path: Path) -> 
     assert "orders.status" in result.sql  # columns were fully qualified
     assert result.summary == "The query returned 1 row."
     assert result.row_count == 1
+    assert set(result.retrieved_tables) == {
+        "customers", "products", "orders", "order_items", "refunds"
+    }
     assert result.corrections == []
     # EXPLAIN preflight ran before execution, on the same validated SQL.
     assert executor.explained == executor.executed
@@ -56,6 +59,18 @@ def test_sensitive_star_question_is_rejected_end_to_end(tmp_path: Path) -> None:
     # The FakeLLM keeps returning the same SELECT *, so the budget is spent.
     assert result.attempts == 3
     assert all(round_.stage == "guardrail" for round_ in result.corrections)
+
+
+def test_fake_llm_does_not_fake_success_for_unsupported_questions(tmp_path: Path) -> None:
+    executor = FakeExecutor()
+    components = build_components(
+        _settings(tmp_path), executor=executor, history=InMemoryHistoryStore()
+    )
+    result = components.pipeline.answer("What is the total revenue by month?")
+
+    assert result.status is QueryStatus.REJECTED
+    assert result.error is not None and "OPENAI_API_KEY" in result.error
+    assert executor.executed == []
 
 
 def test_history_records_both_outcomes(tmp_path: Path) -> None:

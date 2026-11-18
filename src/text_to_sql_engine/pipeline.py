@@ -85,6 +85,7 @@ class TextToSqlPipeline:
             rows=rows,
             row_count=len(rows),
             summary=summary,
+            retrieved_tables=[card.table for card in cards],
             attempts=outcome.attempts,
             corrections=outcome.rounds,
             latency_ms=latency_ms,

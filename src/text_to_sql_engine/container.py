@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from text_to_sql_engine.config import Settings
-from text_to_sql_engine.demo_data import DEMO_SQL_TEMPLATES
+from text_to_sql_engine.demo_data import DEMO_SQL_TEMPLATES, FAKE_LLM_NO_TEMPLATE_SQL
 from text_to_sql_engine.embeddings.base import Embedder
 from text_to_sql_engine.embeddings.fake import FakeEmbedder
 from text_to_sql_engine.embeddings.openai_embedder import OpenAIEmbedder
@@ -53,7 +53,9 @@ def build_components(
     embedder: Embedder
     if settings.offline_llm:
         if llm is None:
-            llm = FakeLLM(sql_templates=DEMO_SQL_TEMPLATES)
+            llm = FakeLLM(
+                sql_templates=DEMO_SQL_TEMPLATES, default=FAKE_LLM_NO_TEMPLATE_SQL
+            )
         embedder = FakeEmbedder()
         llm_mode = "fake"
     else:
