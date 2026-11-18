@@ -109,14 +109,16 @@ def main() -> int:
     print(_RULE)
 
     if live:
-        live_settings = settings.model_copy(update={"openai_api_key": None})
+        live_settings = settings.model_copy(
+            update={"openai_api_key": None, "gemini_api_key": None}
+        )
         components = build_components(live_settings)
         for case in DEMO_CASES:
             _print_result(components.pipeline.answer(case.question))
         history = _correction_showcase(live_settings, components.history, live=True)
     else:
         offline = settings.model_copy(
-            update={"database_url": None, "openai_api_key": None}
+            update={"database_url": None, "openai_api_key": None, "gemini_api_key": None}
         )
         history = None
         for case in DEMO_CASES:

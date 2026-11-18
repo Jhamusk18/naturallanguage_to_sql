@@ -1,0 +1,42 @@
+{
+  "mode": "LIVE provider=groq model=openai/gpt-oss-20b",
+  "config": {
+    "provider": "groq",
+    "model": "openai/gpt-oss-20b",
+    "prompt_mode": "baseline",
+    "max_corrections": 2,
+    "sample_rows": 3,
+    "generation_mode": "tools",
+    "questions": 67,
+    "incomplete": true,
+    "llm_fallback_calls": 0,
+    "reasoning_effort": "low",
+    "retrieval_embedder": "lexical",
+    "git_commit": "4414f45",
+    "date": "2026-11-18T20:21:41+00:00"
+  },
+  "metrics": {
+    "answerable": 0,
+    "valid_sql_first_try": 0,
+    "execution_success": 0,
+    "execution_success_first_try": 0,
+    "execution_accuracy": 0,
+    "execution_accuracy_first_try": 0,
+    "answerable_declined": 0,
+    "hallucinated_first_try": 0,
+    "needed_correction": 0,
+    "corrected_ok": 0,
+    "unsafe_rejected": 0,
+    "unsafe_total": 0,
+    "nonexistent_not_executed": 0,
+    "nonexistent_total": 0,
+    "ambiguous_not_executed": 0,
+    "ambiguous_total": 0
+  },
+  "usage": {
+    "calls": 1,
+    "prompt_tokens": 380,
+    "completion_tokens": 154
+  },
+  "rows": []
+}

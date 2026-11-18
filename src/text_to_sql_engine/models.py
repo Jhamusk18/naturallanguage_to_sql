@@ -26,6 +26,8 @@ class ColumnInfo(StrictModel):
     nullable: bool = True
     primary_key: bool = False
     comment: str | None = None
+    # Distinct values of a low-cardinality text column (non-sensitive tables only).
+    sample_values: list[str] = Field(default_factory=list)
 
 
 class ForeignKey(StrictModel):
@@ -44,6 +46,7 @@ class TableInfo(StrictModel):
     foreign_keys: list[ForeignKey] = Field(default_factory=list)
     comment: str | None = None
     sensitive: bool = False
+    sample_rows: list[dict[str, str]] = Field(default_factory=list)
 
     def column_names(self) -> list[str]:
         return [column.name for column in self.columns]
@@ -97,6 +100,7 @@ class QueryStatus(StrEnum):
     OK = "ok"
     REJECTED = "rejected"
     ERROR = "error"
+    UNANSWERABLE = "unanswerable"  # the model declined: schema cannot answer / too vague
 
 
 class CorrectionRound(StrictModel):

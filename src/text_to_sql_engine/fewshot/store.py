@@ -17,11 +17,14 @@ class FewShotStore:
     def __init__(self, exemplars: Sequence[Exemplar], embedder: Embedder) -> None:
         self._exemplars = list(exemplars)
         self._embedder = embedder
-        self._vectors = (
-            embedder.embed([exemplar.question for exemplar in self._exemplars])
-            if self._exemplars
-            else []
-        )
+        self._vectors: list[list[float]] = []
+        self._space = ""
+        self._refresh_vectors()
+
+    def _refresh_vectors(self) -> None:
+        if self._exemplars:
+            self._vectors = self._embedder.embed([e.question for e in self._exemplars])
+        self._space = str(getattr(self._embedder, "space", ""))
 
     def __len__(self) -> int:
         return len(self._exemplars)
@@ -31,6 +34,9 @@ class FewShotStore:
         if not self._exemplars or k <= 0:
             return []
         question_vector = self._embedder.embed([question])[0]
+        if str(getattr(self._embedder, "space", "")) != self._space:
+            self._refresh_vectors()
+            question_vector = self._embedder.embed([question])[0]
         scored = sorted(
             enumerate(self._exemplars),
             key=lambda pair: (

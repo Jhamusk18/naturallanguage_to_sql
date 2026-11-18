@@ -30,7 +30,9 @@ LIVE_MODE_QUESTIONS = [
 ]
 GUARDRAIL_QUESTION = "Show me everything about our customers."
 
-STATUS_STYLE = {"ok": "success", "rejected": "warning", "error": "error"}
+STATUS_STYLE = {
+    "ok": "success", "rejected": "warning", "error": "error", "unanswerable": "warning"
+}
 
 st.set_page_config(page_title="Natural Language-to-SQL Analytics System", layout="wide")
 
@@ -58,11 +60,15 @@ def render_mode_banner(health: dict[str, str]) -> bool:
         st.warning(
             "**Demo mode: FakeLLM.** SQL comes from a small table of predefined templates, "
             "so only the bundled questions below work. This is not general-purpose "
-            "NL-to-SQL. Set `OPENAI_API_KEY` and restart the backend to use a real model. "
+            "NL-to-SQL. Set `GEMINI_API_KEY` (or `OPENAI_API_KEY`) and restart the backend "
+            "to use a real model. "
             f"Database: {database}."
         )
     else:
-        st.success(f"**Live mode:** OpenAI model generates SQL. Database: {database}.")
+        names = {"gemini": "Google Gemini", "groq": "Groq", "openai": "OpenAI"}
+        provider = names.get(health["llm"], health["llm"])
+        model = health.get("model", "unknown model")
+        st.success(f"**Live mode:** {provider} (`{model}`) generates SQL. Database: {database}.")
     return fake_llm
 
 
@@ -98,11 +104,14 @@ def render_result(result: dict[str, Any]) -> None:
         else:
             st.info("The query ran successfully but returned no rows.")
     else:
-        heading = "Rejected by validation" if status == "rejected" else "Query failed"
+        heading = {
+            "rejected": "Rejected by validation",
+            "unanswerable": "Not answerable from this schema",
+        }.get(status, "Query failed")
         st.error(f"**{heading}:** {result['error']}")
         if "has_no_template" in (result["error"] or ""):
             st.info("FakeLLM has no template for this question. Use one of the example "
-                    "questions, or set `OPENAI_API_KEY` for free-form questions.")
+                    "questions, or configure `GEMINI_API_KEY` for free-form questions.")
 
     if result["corrections"]:
         with st.expander(f"Self-correction trace ({len(result['corrections'])} failed attempt(s))",

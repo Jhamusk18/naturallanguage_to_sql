@@ -69,7 +69,7 @@ def test_fake_llm_does_not_fake_success_for_unsupported_questions(tmp_path: Path
     result = components.pipeline.answer("What is the total revenue by month?")
 
     assert result.status is QueryStatus.REJECTED
-    assert result.error is not None and "OPENAI_API_KEY" in result.error
+    assert result.error is not None and "has_no_template" in result.error
     assert executor.executed == []
 
 

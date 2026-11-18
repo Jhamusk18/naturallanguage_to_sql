@@ -5,7 +5,8 @@ Default order matters and is encoded in :func:`default_rules`:
 1. select-only        — reject anything that is not a read query
 2. no-comments        — strip comments so nothing smuggles past later rules
 3. table-allowlist    — every referenced table must exist in the schema
-4. no-star-sensitive  — SELECT * over PII-flagged tables is denied
+4. no-star-sensitive  — SELECT * (or every column) over PII-flagged tables is denied
+   reads-a-table      — constant queries that read no table are rejected
 5. qualify-columns    — rewrite to fully-qualified columns (schema-checked)
 6. limit-inject       — add LIMIT when the model forgot one
 """
@@ -128,6 +129,53 @@ class SensitiveStarRule:
         return expression
 
 
+class SensitiveAllColumnsRule:
+    """Spelling out every column of a sensitive table is ``SELECT *`` in disguise."""
+
+    name = "no-all-columns-sensitive"
+
+    def apply(self, expression: exp.Expression, ctx: GuardrailContext) -> exp.Expression:
+        sensitive = ctx.schema.sensitive_tables()
+        if not sensitive:
+            return expression
+        tables = {table.name: table for table in ctx.schema.tables}
+        for select in expression.find_all(exp.Select):
+            sources = _select_sources(select)
+            projected: dict[str, set[str]] = {}
+            for projection in select.expressions:
+                column = projection.unalias()
+                if not isinstance(column, exp.Column):
+                    continue
+                if column.table:
+                    source = sources.get(column.table)
+                    owners = [source] if source else []
+                else:
+                    owners = list(set(sources.values()))
+                for owner in owners:
+                    projected.setdefault(owner, set()).add(column.name)
+            for owner, names in projected.items():
+                if owner in sensitive and set(tables[owner].column_names()) <= names:
+                    raise GuardrailViolation(
+                        self.name,
+                        f"selecting every column of sensitive table '{owner}' is not allowed",
+                    )
+        return expression
+
+
+class NoConstantQueryRule:
+    """A query that reads no table cannot answer a data question; models emit
+    ``SELECT 1 WHERE FALSE`` or an error string as a disguised refusal."""
+
+    name = "reads-a-table"
+
+    def apply(self, expression: exp.Expression, ctx: GuardrailContext) -> exp.Expression:
+        if not any(True for _ in expression.find_all(exp.Table)):
+            raise GuardrailViolation(
+                self.name, "the query reads no table, so it cannot answer a data question"
+            )
+        return expression
+
+
 class QualifyColumnsRule:
     """Rewrites every column to a fully-qualified reference using the
     introspected schema. As a side effect this validates column existence
@@ -183,6 +231,8 @@ def default_rules() -> list[GuardrailRule]:
         NoCommentsRule(),
         TableAllowlistRule(),
         SensitiveStarRule(),
+        SensitiveAllColumnsRule(),
+        NoConstantQueryRule(),
         QualifyColumnsRule(),
         LimitInjectRule(),
     ]

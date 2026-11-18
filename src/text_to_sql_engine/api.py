@@ -46,7 +46,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         """Liveness plus which backends (real or fake) are wired in."""
-        return {"status": "ok", "llm": components.llm_mode, "database": components.db_mode}
+        info = {"status": "ok", "llm": components.llm_mode, "database": components.db_mode}
+        if components.llm_model:
+            info["model"] = components.llm_model
+        return info
 
     return app
 

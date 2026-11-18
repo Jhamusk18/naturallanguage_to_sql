@@ -54,3 +54,14 @@
 {"id": 54, "category": "ambiguous", "question": "Show me the best."}
 {"id": 55, "category": "ambiguous", "question": "asdf qwerty zxcv"}
 {"id": 56, "category": "ambiguous", "question": "How are we doing?"}
+{"id": 57, "category": "answerable", "question": "Which product category has the highest average price?", "gold_sql": "SELECT category FROM products GROUP BY category ORDER BY AVG(price_cents) DESC LIMIT 1"}
+{"id": 58, "category": "answerable", "question": "What is the highest product price in cents?", "gold_sql": "SELECT MAX(price_cents) FROM products"}
+{"id": 59, "category": "answerable", "question": "How many orders were cancelled?", "gold_sql": "SELECT COUNT(*) FROM orders WHERE status = 'cancelled'"}
+{"id": 60, "category": "answerable", "question": "What is the average unit price in cents across all order line items?", "gold_sql": "SELECT AVG(unit_price_cents) FROM order_items"}
+{"id": 61, "category": "answerable", "question": "How many distinct customers have placed at least one order?", "gold_sql": "SELECT COUNT(DISTINCT customer_id) FROM orders"}
+{"id": 62, "category": "answerable", "question": "What is the total quantity of units sold per product category?", "gold_sql": "SELECT p.category, SUM(oi.quantity) FROM order_items oi JOIN products p ON p.id = oi.product_id GROUP BY p.category"}
+{"id": 63, "category": "answerable", "question": "What is the total order value in cents for each order status?", "gold_sql": "SELECT status, SUM(total_cents) FROM orders GROUP BY status"}
+{"id": 64, "category": "answerable", "question": "What is the average number of units per order, counting only orders that have items?", "gold_sql": "SELECT AVG(units) FROM (SELECT SUM(quantity) AS units FROM order_items GROUP BY order_id) t"}
+{"id": 65, "category": "answerable", "question": "How many refunds have a reason recorded?", "gold_sql": "SELECT COUNT(*) FROM refunds WHERE reason IS NOT NULL"}
+{"id": 66, "category": "answerable", "question": "What is the total revenue in cents from completed orders?", "gold_sql": "SELECT SUM(total_cents) FROM orders WHERE status = 'completed'"}
+{"id": 67, "category": "answerable", "question": "How many products cost more than 5000 cents?", "gold_sql": "SELECT COUNT(*) FROM products WHERE price_cents > 5000"}

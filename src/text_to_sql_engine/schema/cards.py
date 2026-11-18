@@ -52,8 +52,29 @@ def build_card(table: TableInfo) -> SchemaCard:
             line += f" -> {fk.references_table}.{fk.references_column}"
         if column.comment:
             line += f" -- {column.comment}"
+        if column.sample_values:
+            line += " (values: " + ", ".join(column.sample_values) + ")"
         lines.append(line)
+    for row in table.sample_rows:
+        lines.append("  sample: " + ", ".join(f"{name}={value}" for name, value in row.items()))
     text = "\n".join(lines)
+    return SchemaCard(table=table.name, text=text, tokens=estimate_tokens(text))
+
+
+def build_name_only_card(table: TableInfo) -> SchemaCard:
+    """Baseline card: the table name and nothing else (no columns, types, keys, samples)."""
+    text = f"table {table.name}"
+    return SchemaCard(table=table.name, text=text, tokens=estimate_tokens(text))
+
+
+def build_columns_only_card(table: TableInfo) -> SchemaCard:
+    """Middle ablation arm: table and column names only.
+
+    No types, keys, comments, sample rows, or [sensitive] flag. This is what a
+    naive "paste the column list into the prompt" approach looks like, so it
+    isolates what the richer metadata + sample rows + exemplars add on top.
+    """
+    text = f"table {table.name}({', '.join(column.name for column in table.columns)})"
     return SchemaCard(table=table.name, text=text, tokens=estimate_tokens(text))
 
 

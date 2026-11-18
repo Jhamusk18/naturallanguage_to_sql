@@ -34,7 +34,7 @@ flowchart LR
         CARDS --> PB[Prompt builder]
         FS[Few-shot store<br>top-3 exemplars] --> PB
     end
-    PB --> LLM[LLM provider<br>OpenAI or FakeLLM]
+    PB --> LLM[LLM provider<br>Gemini, OpenAI, or FakeLLM]
     LLM --> GR{Guardrail pipeline<br>sqlglot AST rules}
     GR -- "violation + SQL" --> LLM
     GR -- validated SQL --> EXP{EXPLAIN preflight}
@@ -58,7 +58,7 @@ The back edges into the LLM are the correction loop — each carries the failing
 | psycopg 3 | PostgreSQL driver | First-class read-only transactions, SQLSTATE surfaces, connection options for `statement_timeout` |
 | PostgreSQL 16 | Demo database | Realistic e-commerce schema with comments and FKs to introspect |
 | SQLite (stdlib) | Query history | Durable persistence with zero extra dependencies |
-| uv + ruff + mypy + pytest | Toolchain | Fast installs, strict lint/type gates, 127 offline tests |
+| uv + ruff + mypy + pytest | Toolchain | Fast installs, strict lint/type gates, 141 offline tests |
 
 ## Quickstart
 
@@ -70,7 +70,7 @@ cd text-to-sql-engine
 
 make install   # uv venv + editable install with dev extras
 make demo      # fully offline: fixture schema, FakeLLM, real guardrails
-make test      # 127 tests — no network, no DB, no keys
+make test      # 141 tests — no network, no DB, no keys
 ```
 
 To run against a live PostgreSQL with the bundled e-commerce schema and seed:
@@ -82,7 +82,7 @@ DATABASE_URL=postgresql://t2s:t2s@localhost:5432/shop make demo
 
 The demo asks the same bundled questions either way — the offline fixture rows were computed from the same seed data by `scripts/generate_seed.py`, so both modes print the same numbers.
 
-To serve the API (offline by default; set `DATABASE_URL` / `OPENAI_API_KEY` to go live):
+To serve the API (offline by default; set `DATABASE_URL` and `GEMINI_API_KEY` (or `OPENAI_API_KEY`) to go live):
 
 ```bash
 make run       # uvicorn on 127.0.0.1:8000
@@ -100,7 +100,7 @@ Requires Python 3.12 and [uv](https://docs.astral.sh/uv/) (`pip install --user u
 
 ```bash
 make install            # venv + dependencies, including the Streamlit UI extra
-cp .env.example .env    # optional: add OPENAI_API_KEY and DATABASE_URL
+cp .env.example .env    # optional: add GEMINI_API_KEY (free tier) and DATABASE_URL
 
 # PostgreSQL, pick one:
 make db-up              # Docker (docker compose)
@@ -116,9 +116,9 @@ With no `.env`, the backend still starts: fake LLM, fixture schema, fixture rows
 
 ### Fake mode vs live mode
 
-| | Fake mode (no `OPENAI_API_KEY`) | Live mode |
+| | Fake mode (no API key) | Live mode |
 |---|---|---|
-| SQL source | A fixed table of templates in `demo_data.py`, matched by question substring | OpenAI model, prompted with ranked schema cards and few-shot examples |
+| SQL source | A fixed table of templates in `demo_data.py`, matched by question substring | Gemini (default `gemini-3.5-flash-lite`) or OpenAI, prompted with ranked schema cards and few-shot examples |
 | Questions answered | Only the 5 bundled questions (plus one guardrail-rejection example). Anything else is rejected with an explicit "FakeLLM has no template" error | Free-form questions about the connected schema |
 | Validation, EXPLAIN, read-only execution, correction loop | Real | Real |
 | Database | Real PostgreSQL if `DATABASE_URL` is set, otherwise fixture rows | Real PostgreSQL |
@@ -147,32 +147,61 @@ Note on this seed data: no customer has more than 3 orders and every product has
 
 ### Evaluation
 
-`evaluation/questions.jsonl` has 56 questions written against this schema: 43 answerable (each with a gold SQL), 6 unsafe requests, 4 that reference nonexistent columns or tables, and 3 ambiguous or invalid inputs.
+`evaluation/questions.jsonl` has 67 questions written against this schema: 54 answerable (each with a gold SQL), 6 unsafe requests, 4 that reference nonexistent columns or tables, and 3 ambiguous or invalid inputs.
 
 ```bash
 make eval-oracle    # sanity check of dataset + pipeline using the gold SQL, no LLM
-make eval           # real model: needs OPENAI_API_KEY and DATABASE_URL
+make eval           # real model: needs GEMINI_API_KEY (or OPENAI_API_KEY) and DATABASE_URL
 ```
 
 `make eval` refuses to run on the FakeLLM. Metrics: first-attempt valid SQL rate (passes guardrails and EXPLAIN), execution success rate, execution accuracy against the gold SQL's rows, correction success rate (of questions whose first attempt failed), unsafe rejection rate, and a before/after row-count check that no table changed. Per-question results are written to `artifacts/`.
 
-What has been measured so far:
+What has been measured (full evidence and per-bullet mapping: [`docs/RESUME_EVIDENCE.md`](docs/RESUME_EVIDENCE.md)):
 
-- `make eval-oracle` on PostgreSQL: 43/43 gold queries pass validation and execute and match themselves, 6/6 unsafe statements are rejected, and no table row count changed. This validates the dataset and the guardrails. It says nothing about model quality, because the "model" is the answer key.
-- No live-model numbers exist yet. The OpenAI code path was exercised end to end only against a scripted local stub that speaks the OpenAI HTTP API (wiring check). Run `make eval` with a real key and report those numbers as they come out.
+- `make eval-oracle`: 54/54 gold queries pass validation, execute and match; 6/6 unsafe requests rejected; no table changed. This checks the dataset and guardrails, not model quality.
+- **v2 ablation** (current code), Groq `openai/gpt-oss-20b` (reasoning effort low, temperature 0, lexical retrieval), 54 answerable questions, all four arms on 2026-11-18, files in `evaluation/results/v2-groq-gpt-oss-20b/`. Each arm runs with up to 2 corrections; the first attempt of that run is the corrections-off result for the same question.
+
+| Prompt | First-try hallucination | Query success OFF → ON | Accuracy OFF → ON | Failed first attempts fixed |
+|---|---|---|---|---|
+| table names only (`baseline`) | 17/54 (31.5%) | 18/54 (33.3%) → 39/54 (72.2%) | 17/54 → 28/54 | 21/22 |
+| table + column names (`columns_only`) | 0/54 | 53/54 (98.1%) → 54/54 | 37/54 (68.5%) → 37/54 | 1/1 |
+| schema-aware, no sample rows | 0/54 | 53/54 → 54/54 | 45/54 (83.3%) → 45/54 | 1/1 |
+| schema-aware + sample rows (default) | 0/54 | 53/54 (98.1%) → 54/54 (100%) | 45/54 (83.3%) → 45/54 | 1/1 |
+
+  Column-tolerant accuracy (`python -m evaluation.rescore`; the gold columns must appear with identical values, extra columns allowed, row count equal): schema-aware 48/54 (88.9%), column names only 41/54 (75.9%), names only 17/54 → 33/54 with correction. Strict accuracy stays the headline number.
+
+  In every arm 6/6 unsafe requests were refused and no data changed. With any column information the model also declined 3/4 nonexistent-column and 3/3 ambiguous questions instead of inventing SQL; the names-only prompt falsely declined 15/54 answerable questions.
+- **v3 ablation, second model** (same code, questions and arms as v2), Gemini `gemini-3.5-flash-lite` (OpenAI-compatible endpoint, temperature 0, no fallback model), all four arms on 2026-11-18, files in `evaluation/results/v3-gemini-3.5-flash-lite/`. This is a separate experiment on a different model and is not pooled with the Groq numbers.
+
+| Prompt | First-try hallucination | Query success OFF → ON | Strict accuracy OFF → ON | Column-tolerant accuracy OFF → ON | Failed first attempts fixed | Falsely declined |
+|---|---|---|---|---|---|---|
+| table names only (`baseline`) | 10/54 (18.5%) | 7/54 (13.0%) → 17/54 (31.5%) | 5/54 → 12/54 | 5/54 → 12/54 | 10/10 | 37/54 |
+| table + column names (`columns_only`) | 0/54 | 49/54 (90.7%) → 53/54 (98.1%) | 36/54 (66.7%) → 37/54 (68.5%) | 39/54 → 40/54 | 4/4 | 1/54 |
+| schema-aware, no sample rows | 0/54 | 50/54 (92.6%) → 53/54 (98.1%) | 43/54 (79.6%) → 44/54 (81.5%) | 45/54 → 47/54 | 3/3 | 1/54 |
+| schema-aware + sample rows (default) | 0/54 | 51/54 (94.4%) → 54/54 (100%) | 42/54 (77.8%) → 43/54 (79.6%) | 44/54 → 46/54 | 3/3 | 0/54 |
+
+  In every Gemini arm 6/6 unsafe requests were refused, 4/4 nonexistent-column and 3/3 ambiguous questions were not executed, and no data changed. With names only, Gemini declined 37/54 answerable questions instead of guessing, so its low query success there is mostly refusals rather than failed SQL.
+- **Function calling** (`GENERATION_MODE=tools`, `tool_calling.py`): runs on the same model were stopped by the Groq free-tier daily token cap (200,000 tokens/day for `gpt-oss-20b`). `evaluation/results/v2-groq-gpt-oss-20b/incomplete/aware_tools_c2.json` holds 13 of 67 questions (13/13 first-try success, 11/13 strict accuracy) and `names_only_tools_c2.json` none; both are marked `incomplete`, `compare.py` refuses them, and no tool-mode result is claimed. Finish with `--resume` once the quota frees.
+- **v1 ablation** (code before the catalog-grounded correction prompt), Groq `qwen/qwen3.8-27b`, `evaluation/results/v1-groq-qwen3.8-27b/`: first-try hallucination 34/54 (names only) → 0/54 (schema-aware); correction lifted names-only query success 14/54 → 23/54 (9 of 40 failures fixed).
+- Earlier Gemini `gemini-3.5-flash-lite` baseline runs (names-only prompt only; the schema-aware arms were stopped by the free-tier quota) are kept in `evaluation/results/gemini/`; the complete v3 run above supersedes them. Neither is compared with the Groq files.
+
+What these show: schema-aware prompting removes hallucinated tables/columns (100% relative reduction vs names-only, on both models) and raises accuracy over a column-list prompt (68.5% → 83.3%); sample rows on top of metadata had no measurable effect on this small schema. Feeding the error plus the real catalog columns back to the model fixes 95% of failed first attempts (v1 fixed 23%), but with schema-aware prompting first attempts already succeed 98% of the time, so the end-to-end lift is largest when the prompt context is weak. The Gemini run shows the same pattern on a second model: hallucinations 10/54 → 0/54 with schema-aware prompting, strict accuracy 68.5% (column names) → 79.6% (schema-aware), and correction fixed every failed first attempt (3/3 to 10/10 per arm).
 
 ### Architecture in one paragraph
+
+Diagram and design notes: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 
 A question is embedded and used to rank per-table schema cards (introspected from `pg_catalog`) and pick 3 few-shot examples; the prompt builder assembles dialect rules, cards, examples, and the question. The LLM's SQL is parsed once with sqlglot and folded through AST rules (single statement, SELECT only, table allowlist, comment stripping, LIMIT injection, sensitive-table star denial, column qualification). Validated SQL is preflighted with `EXPLAIN` and executed in a read-only transaction with a server-side timeout. Fixable errors are fed back to the model with the failing SQL for up to 2 rounds; policy errors stop immediately. The FastAPI service returns the SQL, rows, summary, retrieved tables, and the correction trace; the Streamlit app in `ui/app.py` renders them.
 
 ### Limitations and future work
 
-- Live LLM accuracy is unmeasured; the evaluation set is small and uses one tiny schema (12 customers, 30 orders).
+- The evaluation set is small (54 answerable questions) and uses one tiny schema (12 customers, 30 orders); accuracy misses are mostly definition disagreements with the gold SQL (extra columns, status filters on revenue).
 - Schema retrieval ranks all 5 tables but the whole schema fits in the token budget, so retrieval does not filter anything on this database. It matters for wide schemas.
 - The few-shot exemplars are written for the demo schema and need to be replaced for another database.
 - The result summary is a one-sentence LLM paraphrase of metadata and the first row, not an analysis.
 - No authentication, rate limiting, or conversation memory; each question is independent.
-- The Docker path (`make db-up`) and the real OpenAI path were not run in the development environment (no Docker, no API key). The same PostgreSQL steps were run via apt on Ubuntu 24.04 and `scripts/setup_local_postgres.sh` was re-run against an existing install.
+- The Docker path (`make db-up`) and the real Gemini and OpenAI paths were not run in the development environment (no Docker, no API key). The same PostgreSQL steps were run via apt on Ubuntu 24.04 and `scripts/setup_local_postgres.sh` was re-run against an existing install.
 - Ideas: execution-based self-consistency, per-column value sampling in the cards, a larger evaluation set, and streaming responses.
 
 ## Configuration
@@ -182,13 +211,25 @@ Copy `.env.example` to `.env` and adjust. Every variable is optional — with no
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | *(unset → fixtures)* | PostgreSQL DSN for introspection and execution |
-| `OPENAI_API_KEY` | *(unset → FakeLLM)* | Enables the OpenAI provider and embedder |
+| `LLM_PROVIDER` | `auto` | `auto` (Gemini, then Groq, then OpenAI, by which key is set; else fake), `gemini`, `groq`, or `openai` |
+| `GEMINI_API_KEY` | *(unset)* | Enables the Gemini provider and embedder (free tier available) |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Chat model for generation, correction, summaries |
+| `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-2` | Embeddings for schema-card and few-shot retrieval |
+| `GEMINI_API` | `native` | `openai_compat` = call Gemini through its OpenAI-compatible endpoint with the key as `Authorization: Bearer` (use when the key is injected that way, e.g. by a proxy); also enables `GENERATION_MODE=tools` on Gemini |
+| `GROQ_API_KEY` | *(unset)* | Enables the Groq provider (`LLM_PROVIDER=groq`); retrieval uses the local lexical embedder because Groq has no embeddings API |
+| `GROQ_MODEL` | `qwen/qwen3.8-27b` | Chat model for generation, correction, summaries |
+| `GROQ_REASONING_EFFORT` | *(unset)* | `low`/`medium`/`high` for reasoning models such as `openai/gpt-oss-20b` |
+| `LLM_FALLBACK` | `auto` | With Gemini selected and `GROQ_API_KEY` set, a Gemini failure (e.g. free-tier quota) automatically fails over to Groq (and lexical retrieval); `none` disables. Evaluation reports how many calls used the fallback, since those results are mixed-provider |
+| `OPENAI_API_KEY` | *(unset)* | Enables the OpenAI provider and embedder |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Chat model for generation, correction, summaries |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embeddings for schema-card and few-shot retrieval |
 | `DEFAULT_ROW_LIMIT` | `200` | `LIMIT` injected when the model forgot one |
 | `MAX_CORRECTION_ROUNDS` | `2` | Retry budget of the self-correction loop |
 | `STATEMENT_TIMEOUT_MS` | `5000` | Server-enforced per-statement timeout |
-| `SCHEMA_TOKEN_BUDGET` | `1200` | Approximate token cap for schema cards in the prompt |
+| `SCHEMA_TOKEN_BUDGET` | `2000` | Approximate token cap for schema cards in the prompt |
+| `SAMPLE_ROWS_PER_TABLE` | `3` | Real rows per non-sensitive table shown in schema cards (`0` disables; sensitive tables are never sampled) |
+| `PROMPT_MODE` | `schema_aware` | `baseline` = bare table names; `columns_only` = table + column names; both without exemplars (ablation only) |
+| `GENERATION_MODE` | `text` | `tools` = LLM function calling (`describe_table`, `submit_sql`, `cannot_answer`); Groq/OpenAI only |
 | `SENSITIVE_TABLES` | `customers` | Comma-separated tables where `SELECT *` is denied |
 | `HISTORY_DB_PATH` | `artifacts/history.sqlite` | SQLite file for query history |
 
@@ -352,7 +393,7 @@ class LLMProvider(Protocol):
         ...
 ```
 
-Same pattern for `Embedder`, `QueryExecutor`, `SchemaProvider`, and `HistoryStore` — each protocol has a real implementation (OpenAI, psycopg, `pg_catalog` introspection, SQLite) and a deterministic fake (`FakeLLM` with scripted responses and question-template matching, `FakeEmbedder` hashing words into a normalized vector, `FakeExecutor` with scriptable failure sequences, a fixture schema mirroring the docker-compose database). Wiring happens in exactly one place (`container.py`): no API key means fakes, no `DATABASE_URL` means fixtures — the rest of the codebase never reads the environment. The payoff: the *entire* behavior surface, including the correction loop's failure choreography and the demo itself, is exercised by fast, fully offline tests, and CI needs no secrets and no services.
+Same pattern for `Embedder`, `QueryExecutor`, `SchemaProvider`, and `HistoryStore` — each protocol has a real implementation (Gemini/OpenAI, psycopg, `pg_catalog` introspection, SQLite) and a deterministic fake (`FakeLLM` with scripted responses and question-template matching, `FakeEmbedder` hashing words into a normalized vector, `FakeExecutor` with scriptable failure sequences, a fixture schema mirroring the docker-compose database). Wiring happens in exactly one place (`container.py`): no API key means fakes, no `DATABASE_URL` means fixtures — the rest of the codebase never reads the environment. The payoff: the *entire* behavior surface, including the correction loop's failure choreography and the demo itself, is exercised by fast, fully offline tests, and CI needs no secrets and no services.
 
 ## Project structure
 
@@ -363,8 +404,8 @@ text-to-sql-engine/
 │   │                      #   sensitive-star, qualify-columns, limit-inject
 │   ├── schema/            # pg_catalog introspection, schema cards, cache, fixtures
 │   ├── fewshot/           # exemplar store + 15 bundled (question, SQL) pairs
-│   ├── llm/               # LLMProvider protocol, OpenAI adapter, FakeLLM
-│   ├── embeddings/        # Embedder protocol, OpenAI adapter, FakeEmbedder
+│   ├── llm/               # LLMProvider protocol, Gemini + OpenAI adapters, FakeLLM
+│   ├── embeddings/        # Embedder protocol, Gemini + OpenAI adapters, FakeEmbedder
 │   ├── execution/         # executors (Postgres/fake) + SQLSTATE classification
 │   ├── correction.py      # the self-correction loop state machine
 │   ├── pipeline.py        # end-to-end orchestration
@@ -373,7 +414,7 @@ text-to-sql-engine/
 │   └── demo.py            # offline-first demo
 ├── db/init/               # e-commerce schema + generated deterministic seed
 ├── scripts/               # seed generator (also prints the expected answers)
-├── tests/                 # 127 offline tests
+├── tests/                 # 141 offline tests
 ├── docker-compose.yml     # postgres:16 with schema + seed auto-applied
 └── Makefile               # install / lint / type / test / demo / run / db-up
 ```
@@ -384,7 +425,7 @@ text-to-sql-engine/
 make check   # ruff + mypy (strict) + pytest
 ```
 
-127 tests run in under a second, entirely offline — no network, no database, no API keys, no model downloads. Coverage by area:
+141 tests run in under a second, entirely offline — no network, no database, no API keys, no model downloads. Coverage by area:
 
 - **Guardrails** — every rule individually and through the pipeline: rejects UPDATE/DELETE/INSERT/DDL, DML inside CTEs, `SELECT ... INTO`, row locks, multi-statements, and unknown tables (including inside subqueries); strips comments; injects and preserves LIMITs; denies sensitive stars while expanding safe ones; fully qualifies columns and rejects unknown or ambiguous ones.
 - **Correction loop** — scripted fail-then-succeed at the guardrail, EXPLAIN, and execute stages; budget exhaustion; zero-budget; immediate stop on non-retryable categories.

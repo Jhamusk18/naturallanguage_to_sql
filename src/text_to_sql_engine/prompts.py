@@ -17,6 +17,15 @@ SYSTEM_PROMPT = (
 )
 
 
+CANNOT_ANSWER = "CANNOT_ANSWER"
+
+DECLINE_RULE = (
+    f"If the question needs a table or column that is not listed, or is too vague to "
+    f"map to one query, reply with exactly `{CANNOT_ANSWER}: <short reason>` instead of SQL "
+    "(never substitute a different column)."
+)
+
+
 class PromptBuilder:
     """Renders the three prompt shapes the pipeline needs."""
 
@@ -34,6 +43,7 @@ class PromptBuilder:
             f"Dialect: {self._dialect}.",
             "Rules: one SELECT statement only; use only the tables and columns "
             "below; qualify columns with their table name; do not add comments.",
+            DECLINE_RULE,
             "",
             "### Schema",
             *[card.text for card in cards],
@@ -46,25 +56,43 @@ class PromptBuilder:
         sections += ["", "### Question", question, "", "SQL:"]
         return "\n".join(sections)
 
-    def correction(self, question: str, failed_sql: str, error: str) -> str:
-        """Feedback prompt: the failed SQL plus the exact error, nothing else new."""
-        return "\n".join(
-            [
-                f"Your previous {self._dialect} SQL for the question below failed.",
-                "Fix the SQL. Respond with the corrected single SELECT statement only.",
-                "",
-                "### Question",
-                question,
-                "",
-                "### Failed SQL",
-                failed_sql,
-                "",
-                "### Error",
-                error,
-                "",
-                "SQL:",
-            ]
-        )
+    def correction(
+        self,
+        question: str,
+        failed_sql: str,
+        error: str,
+        *,
+        schema_text: str = "",
+        catalog_hint: str = "",
+    ) -> str:
+        """Feedback prompt: the failed SQL, the exact error, and grounding to fix it.
+
+        ``schema_text`` repeats the schema section the first attempt saw (the
+        model has no memory between calls). ``catalog_hint`` lists the tables
+        that really exist and the real columns of the tables the failed SQL
+        touched, looked up from the introspected catalog, so an "undefined
+        column" error comes with the valid alternatives.
+        """
+        lines = [
+            f"Your previous {self._dialect} SQL for the question below failed.",
+            "Fix the SQL. Respond with the corrected single SELECT statement only. "
+            + DECLINE_RULE,
+            "",
+            "### Question",
+            question,
+            "",
+            "### Failed SQL",
+            failed_sql,
+            "",
+            "### Error",
+            error,
+        ]
+        if catalog_hint:
+            lines += ["", "### Catalog facts", catalog_hint]
+        if schema_text:
+            lines += ["", "### Schema", schema_text]
+        lines += ["", "SQL:"]
+        return "\n".join(lines)
 
     def summary(self, question: str, result: ExecutionResult) -> str:
         """Summary prompt; embeds row_count=N so the FakeLLM can answer offline."""

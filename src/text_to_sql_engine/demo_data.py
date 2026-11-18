@@ -55,7 +55,7 @@ DEMO_SQL_TEMPLATES: dict[str, str] = {
 # cannot exist, so the table allowlist rejects it with a self-explanatory
 # message instead of the demo silently "succeeding" with a placeholder query.
 FAKE_LLM_NO_TEMPLATE_SQL = (
-    "SELECT * FROM fake_llm_has_no_template_for_this_question_set_OPENAI_API_KEY"
+    "SELECT * FROM fake_llm_has_no_template_for_this_question_configure_an_llm_provider"
 )
 
 DEMO_CASES: list[DemoCase] = [

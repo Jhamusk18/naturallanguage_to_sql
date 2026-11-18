@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from text_to_sql_engine.embeddings.fake import FakeEmbedder
@@ -10,6 +12,19 @@ from text_to_sql_engine.guardrails.rules import default_rules
 from text_to_sql_engine.models import DatabaseSchema
 from text_to_sql_engine.prompts import PromptBuilder
 from text_to_sql_engine.schema.fixtures import DEMO_SCHEMA
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Runs before test modules are imported (``api`` builds an app at import time).
+
+    Clears every variable Settings reads (keys, LLM_PROVIDER, GEMINI_API, LLM_FALLBACK,
+    DATABASE_URL, ...), so a developer shell or cloud environment cannot change what the
+    offline tests see.
+    """
+    from text_to_sql_engine.config import Settings
+
+    for name in Settings.model_fields:
+        os.environ.pop(name.upper(), None)
 
 
 @pytest.fixture

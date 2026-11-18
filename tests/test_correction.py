@@ -144,3 +144,54 @@ class TestCorrectionLoop:
         assert outcome.status is QueryStatus.REJECTED
         assert outcome.attempts == 1
         assert len(llm.calls) == 1
+
+
+class TestDeclineAndGrounding:
+    """CANNOT_ANSWER handling and catalog-grounded correction prompts."""
+
+    def test_declined_reason_parses_variants(self) -> None:
+        from text_to_sql_engine.correction import declined_reason
+
+        assert declined_reason("CANNOT_ANSWER: no supplier column") == "no supplier column"
+        assert declined_reason("```\nCANNOT_ANSWER: vague\n```") == "vague"
+        assert declined_reason("SELECT 1") is None
+
+    def test_decline_on_first_attempt_is_unanswerable_and_never_executes(
+        self, guardrails: GuardrailPipeline, prompts: PromptBuilder
+    ) -> None:
+        llm = FakeLLM(script=["CANNOT_ANSWER: there is no supplier table"])
+        executor = FakeExecutor()
+        outcome = _loop(llm, guardrails, executor, prompts).run("q", "p")
+        assert outcome.status is QueryStatus.UNANSWERABLE
+        assert outcome.error is not None and "supplier" in outcome.error
+        assert outcome.attempts == 1 and executor.explained == []
+
+    def test_catalog_hint_lists_real_columns_and_unknown_tables(self) -> None:
+        from text_to_sql_engine.correction import catalog_hint
+        from text_to_sql_engine.schema.fixtures import DEMO_SCHEMA
+
+        hint = catalog_hint("SELECT o.amount FROM orders o JOIN shipments s ON 1=1", DEMO_SCHEMA)
+        assert "These tables do NOT exist: shipments" in hint
+        assert "Columns of orders: id, customer_id" in hint
+        assert "Existing tables:" in hint
+
+    def test_correction_prompt_carries_schema_and_catalog_facts(
+        self, guardrails: GuardrailPipeline, prompts: PromptBuilder
+    ) -> None:
+        from text_to_sql_engine.schema.fixtures import DEMO_SCHEMA
+
+        llm = FakeLLM(script=[GOOD_SQL, GOOD_SQL])
+        executor = FakeExecutor(
+            explain_script=[
+                ExecutionError('column "amount" does not exist', sqlstate="42703"),
+                None,
+            ]
+        )
+        loop = CorrectionLoop(
+            llm, guardrails, executor, prompts, 2, schema=DEMO_SCHEMA, schema_text="table orders"
+        )
+        outcome = loop.run("q", "p")
+        assert outcome.status is QueryStatus.OK
+        retry = llm.calls[1]
+        assert "### Catalog facts" in retry and "Columns of orders:" in retry
+        assert "### Schema\ntable orders" in retry
