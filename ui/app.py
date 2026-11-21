@@ -1,18 +1,73 @@
-"""Streamlit front end for the text-to-sql-engine FastAPI backend.
+"""Streamlit front end for the text-to-sql-engine.
 
-Run the backend first (`make run`), then `make ui`.
+Two ways to run it:
+
+* Local, with the FastAPI backend: `make run`, then `make ui` (T2S_API_URL points at it).
+* Embedded (Streamlit Community Cloud): set T2S_EMBEDDED=1 or leave T2S_API_URL unset on
+  a host with no backend; the pipeline then runs inside this Streamlit process. Keys and
+  DATABASE_URL come from Streamlit secrets (`.streamlit/secrets.toml` / the app's
+  Secrets panel) or the environment.
 """
 
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pandas as pd
 import streamlit as st
 
+# Streamlit Cloud installs requirements.txt but not this package; make src importable.
+_SRC = Path(__file__).resolve().parents[1] / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+_SECRET_NAMES = (
+    "DATABASE_URL", "LLM_PROVIDER", "LLM_FALLBACK", "GROQ_API_KEY", "GROQ_MODEL",
+    "GROQ_REASONING_EFFORT", "GEMINI_API_KEY", "GEMINI_API", "GEMINI_MODEL",
+    "GEMINI_EMBEDDING_MODEL", "OPENAI_API_KEY", "GENERATION_MODE", "T2S_EMBEDDED",
+)
+
+
+def _load_streamlit_secrets() -> None:
+    """Copy Streamlit secrets into the environment, where Settings reads them."""
+    try:
+        secrets = dict(st.secrets)
+    except Exception:  # no secrets.toml: plain environment variables only
+        return
+    for name in _SECRET_NAMES:
+        if name in secrets and name not in os.environ:
+            os.environ[name] = str(secrets[name])
+
+
+_load_streamlit_secrets()
 API_URL = os.environ.get("T2S_API_URL", "http://127.0.0.1:8000")
+_EXPLICIT_API = "T2S_API_URL" in os.environ
+_FORCE_EMBEDDED = os.environ.get("T2S_EMBEDDED", "").lower() in {"1", "true", "yes"}
+
+
+def _backend_reachable() -> bool:
+    try:
+        return httpx.get(f"{API_URL}/healthz", timeout=1).status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+@st.cache_resource
+def use_embedded() -> bool:
+    """Embedded when forced, or when no backend address was given and none is running.
+
+    Streamlit Cloud has no FastAPI server, so the app must run the pipeline itself there
+    even if the T2S_EMBEDDED secret was not applied.
+    """
+    if _FORCE_EMBEDDED:
+        return True
+    if _EXPLICIT_API:
+        return False
+    return not _backend_reachable()
 
 FAKE_MODE_QUESTIONS = [
     "Which 5 products have generated the most revenue?",
@@ -37,7 +92,29 @@ STATUS_STYLE = {
 st.set_page_config(page_title="Natural Language-to-SQL Analytics System", layout="wide")
 
 
+@st.cache_resource(show_spinner="Loading schema and model...")
+def _components() -> Any:
+    from text_to_sql_engine.config import Settings
+    from text_to_sql_engine.container import build_components
+
+    settings = Settings()
+    settings = settings.model_copy(update={"history_db_path": "/tmp/t2s-history.sqlite"})
+    return build_components(settings)
+
+
+def _embedded_health() -> dict[str, str]:
+    components = _components()
+    return {
+        "status": "ok",
+        "llm": components.llm_mode,
+        "database": components.db_mode,
+        "model": components.llm_model or "fake",
+    }
+
+
 def fetch_health() -> dict[str, str] | None:
+    if use_embedded():
+        return _embedded_health()
     try:
         response = httpx.get(f"{API_URL}/healthz", timeout=3)
         response.raise_for_status()
@@ -47,6 +124,17 @@ def fetch_health() -> dict[str, str] | None:
 
 
 def run_query(question: str) -> dict[str, Any]:
+    if use_embedded():
+        from text_to_sql_engine.models import QueryResult, QueryStatus
+
+        try:
+            result = _components().pipeline.answer(question)
+        except Exception as error:  # provider quota or outage: show it, do not crash the page
+            message = f"The AI provider did not answer ({type(error).__name__}). "
+            message += "Free-tier limits reset within minutes; try again shortly."
+            result = QueryResult(question=question, sql=None, status=QueryStatus.ERROR,
+                                 error=message)
+        return dict(result.model_dump(mode="json"))
     response = httpx.post(f"{API_URL}/query", json={"question": question}, timeout=120)
     response.raise_for_status()
     return dict(response.json())

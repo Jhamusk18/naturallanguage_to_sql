@@ -20,3 +20,6 @@ artifacts/
 
 # OS noise
 .DS_Store
+
+# Streamlit secrets (real keys)
+.streamlit/secrets.toml

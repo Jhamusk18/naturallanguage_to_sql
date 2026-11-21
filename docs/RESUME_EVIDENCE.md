@@ -86,6 +86,41 @@ schema context; with schema-aware prompting, 98% → 100%."
 - Nonexistent-column questions declined instead of answered: 3/4 (schema-aware); ambiguous: 3/3.
 - Streamlit UI exercised in a browser against live Groq: `docs/screenshots/`.
 
+## Second model: Gemini gemini-3.5-flash-lite (v3)
+
+Same code, questions and four arms as v2, run on 2026-11-18 with Gemini `gemini-3.5-flash-lite`
+(OpenAI-compatible endpoint, temperature 0, `LLM_FALLBACK=none`). Files:
+`evaluation/results/v3-gemini-3.5-flash-lite/`. All four are complete (`incomplete: false`) with 0 fallback
+calls. This is a separate experiment; its numbers are not pooled or compared row-by-row with the Groq runs.
+
+```bash
+LLM_PROVIDER=gemini GEMINI_API=openai_compat LLM_FALLBACK=none \
+  make ablation RESULTS=evaluation/results/v3-gemini-3.5-flash-lite
+python -m evaluation.rescore evaluation/results/v3-gemini-3.5-flash-lite/*.json
+python -m evaluation.compare evaluation/results/v3-gemini-3.5-flash-lite/*.json
+```
+
+| Prompt | First-try hallucination | Query success OFF → ON | Strict accuracy OFF → ON | Column-tolerant OFF → ON | Failed first attempts fixed |
+|---|---|---|---|---|---|
+| names only | 10/54 | 7/54 → 17/54 | 5/54 → 12/54 | 5/54 → 12/54 | 10/10 |
+| column names | 0/54 | 49/54 → 53/54 | 36/54 → 37/54 | 39/54 → 40/54 | 4/4 |
+| schema-aware, no sample rows | 0/54 | 50/54 → 53/54 | 43/54 → 44/54 | 45/54 → 47/54 | 3/3 |
+| schema-aware + sample rows | 0/54 | 51/54 → 54/54 | 42/54 → 43/54 | 44/54 → 46/54 | 3/3 |
+
+| Prompt | Unsafe refused | Nonexistent not executed | Ambiguous not executed | Answerable falsely declined |
+|---|---|---|---|---|
+| names only | 6/6 | 4/4 | 3/3 | 37/54 |
+| column names | 6/6 | 4/4 | 3/3 | 1/54 |
+| schema-aware, no sample rows | 6/6 | 4/4 | 3/3 | 1/54 |
+| schema-aware + sample rows | 6/6 | 4/4 | 3/3 | 0/54 |
+
+Data unchanged in every arm.
+
+Reading: hallucinations fall 10/54 → 0/54 (100% relative reduction, as on both Groq models). With names only,
+Gemini mostly declines rather than guessing (37/54 false refusals), which is why its names-only query success
+(13.0% → 31.5%) is lower than gpt-oss-20b's. Sample rows again made no measurable difference (43/54 vs 44/54
+final strict accuracy, within run-to-run noise). Neither the 40% nor the 72% → 90% figure appears here either.
+
 ## Limits
 
 One small schema (5 tables), 54 questions, single runs per arm (runs vary slightly even at

@@ -171,11 +171,21 @@ What has been measured (full evidence and per-bullet mapping: [`docs/RESUME_EVID
   Column-tolerant accuracy (`python -m evaluation.rescore`; the gold columns must appear with identical values, extra columns allowed, row count equal): schema-aware 48/54 (88.9%), column names only 41/54 (75.9%), names only 17/54 → 33/54 with correction. Strict accuracy stays the headline number.
 
   In every arm 6/6 unsafe requests were refused and no data changed. With any column information the model also declined 3/4 nonexistent-column and 3/3 ambiguous questions instead of inventing SQL; the names-only prompt falsely declined 15/54 answerable questions.
+- **v3 ablation, second model** (same code, questions and arms as v2), Gemini `gemini-3.5-flash-lite` (OpenAI-compatible endpoint, temperature 0, no fallback model), all four arms on 2026-11-18, files in `evaluation/results/v3-gemini-3.5-flash-lite/`. This is a separate experiment on a different model and is not pooled with the Groq numbers.
+
+| Prompt | First-try hallucination | Query success OFF → ON | Strict accuracy OFF → ON | Column-tolerant accuracy OFF → ON | Failed first attempts fixed | Falsely declined |
+|---|---|---|---|---|---|---|
+| table names only (`baseline`) | 10/54 (18.5%) | 7/54 (13.0%) → 17/54 (31.5%) | 5/54 → 12/54 | 5/54 → 12/54 | 10/10 | 37/54 |
+| table + column names (`columns_only`) | 0/54 | 49/54 (90.7%) → 53/54 (98.1%) | 36/54 (66.7%) → 37/54 (68.5%) | 39/54 → 40/54 | 4/4 | 1/54 |
+| schema-aware, no sample rows | 0/54 | 50/54 (92.6%) → 53/54 (98.1%) | 43/54 (79.6%) → 44/54 (81.5%) | 45/54 → 47/54 | 3/3 | 1/54 |
+| schema-aware + sample rows (default) | 0/54 | 51/54 (94.4%) → 54/54 (100%) | 42/54 (77.8%) → 43/54 (79.6%) | 44/54 → 46/54 | 3/3 | 0/54 |
+
+  In every Gemini arm 6/6 unsafe requests were refused, 4/4 nonexistent-column and 3/3 ambiguous questions were not executed, and no data changed. With names only, Gemini declined 37/54 answerable questions instead of guessing, so its low query success there is mostly refusals rather than failed SQL.
 - **Function calling** (`GENERATION_MODE=tools`, `tool_calling.py`): runs on the same model were stopped by the Groq free-tier daily token cap (200,000 tokens/day for `gpt-oss-20b`). `evaluation/results/v2-groq-gpt-oss-20b/incomplete/aware_tools_c2.json` holds 13 of 67 questions (13/13 first-try success, 11/13 strict accuracy) and `names_only_tools_c2.json` none; both are marked `incomplete`, `compare.py` refuses them, and no tool-mode result is claimed. Finish with `--resume` once the quota frees.
 - **v1 ablation** (code before the catalog-grounded correction prompt), Groq `qwen/qwen3.8-27b`, `evaluation/results/v1-groq-qwen3.8-27b/`: first-try hallucination 34/54 (names only) → 0/54 (schema-aware); correction lifted names-only query success 14/54 → 23/54 (9 of 40 failures fixed).
-- Earlier Gemini `gemini-3.5-flash-lite` baseline runs (names-only prompt only; the schema-aware arms were stopped by the free-tier quota) are kept in `evaluation/results/gemini/` and are not compared with the Groq files.
+- Earlier Gemini `gemini-3.5-flash-lite` baseline runs (names-only prompt only; the schema-aware arms were stopped by the free-tier quota) are kept in `evaluation/results/gemini/`; the complete v3 run above supersedes them. Neither is compared with the Groq files.
 
-What these show: schema-aware prompting removes hallucinated tables/columns (100% relative reduction vs names-only, on both models) and raises accuracy over a column-list prompt (68.5% → 83.3%); sample rows on top of metadata had no measurable effect on this small schema. Feeding the error plus the real catalog columns back to the model fixes 95% of failed first attempts (v1 fixed 23%), but with schema-aware prompting first attempts already succeed 98% of the time, so the end-to-end lift is largest when the prompt context is weak.
+What these show: schema-aware prompting removes hallucinated tables/columns (100% relative reduction vs names-only, on both models) and raises accuracy over a column-list prompt (68.5% → 83.3%); sample rows on top of metadata had no measurable effect on this small schema. Feeding the error plus the real catalog columns back to the model fixes 95% of failed first attempts (v1 fixed 23%), but with schema-aware prompting first attempts already succeed 98% of the time, so the end-to-end lift is largest when the prompt context is weak. The Gemini run shows the same pattern on a second model: hallucinations 10/54 → 0/54 with schema-aware prompting, strict accuracy 68.5% (column names) → 79.6% (schema-aware), and correction fixed every failed first attempt (3/3 to 10/10 per arm).
 
 ### Architecture in one paragraph
 
@@ -193,6 +203,25 @@ A question is embedded and used to rank per-table schema cards (introspected fro
 - No authentication, rate limiting, or conversation memory; each question is independent.
 - The Docker path (`make db-up`) and the real Gemini and OpenAI paths were not run in the development environment (no Docker, no API key). The same PostgreSQL steps were run via apt on Ubuntu 24.04 and `scripts/setup_local_postgres.sh` was re-run against an existing install.
 - Ideas: execution-based self-consistency, per-column value sampling in the cards, a larger evaluation set, and streaming responses.
+
+## Deploy on Streamlit Community Cloud (free)
+
+The Streamlit app can run the whole pipeline in-process (`T2S_EMBEDDED=1`), so no FastAPI
+backend is needed. It still needs a PostgreSQL database and one LLM key.
+
+1. **Database (free):** create a project at neon.tech (or any hosted PostgreSQL), copy its
+   connection string, then load the demo data once from your machine:
+   `DATABASE_URL="postgresql://...?sslmode=require" python scripts/seed_database.py`
+2. **App:** at share.streamlit.io choose *Create app*, then this repository, branch `main`,
+   main file `ui/app.py`, and Python 3.12 under *Advanced settings*.
+3. **Secrets:** paste `.streamlit/secrets.toml.example` into the app's *Secrets* box and fill
+   in `DATABASE_URL` and a Groq (or Gemini) key. Never commit real keys; `.streamlit/secrets.toml`
+   is git-ignored.
+4. Deploy. The banner should read "Live mode: Groq ..." and "Database: PostgreSQL".
+
+Safety on a public demo: every query is validated (SELECT only, known tables, sensitive
+`customers` columns protected) and runs in a read-only transaction with a timeout. For extra
+protection, give the app a PostgreSQL role with `SELECT` only.
 
 ## Configuration
 
@@ -431,6 +460,7 @@ The live-database path (introspection SQL, read-only executor) is exercised manu
 - Column-level sensitivity: mask or drop flagged columns instead of rejecting the whole star.
 - Gate execution on `EXPLAIN` cost output, not just success — refuse plans above a configurable cost ceiling.
 - Persist corrected (question, SQL) pairs as new few-shot exemplars after human approval.
+- Analyst-reviewed learning loop (planned, not built). Stage 1: a review queue fed by answers that needed correction, with an analyst page to approve, edit or reject each item. Stage 2: approved items become retrieved examples, and the approval rate is logged per question type. Stage 3: held-out evaluation with the store on and off, to show whether it helps without leaking test questions. Stage 4: auto-approval only for question types with a high, stable approval rate, with analyst spot checks. Gains are expected to level off once common question types are covered.
 - Function denylist (e.g. `pg_sleep`, `pg_read_file`) as an additional guardrail rule.
 - Multi-dialect support via sqlglot transpilation (DuckDB and SQLite backends for local analytics).
 - Embedding cache + pgvector-backed retrieval for schemas with hundreds of tables.

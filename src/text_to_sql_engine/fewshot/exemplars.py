@@ -10,8 +10,11 @@ from text_to_sql_engine.models import Exemplar
 
 DEMO_EXEMPLARS: list[Exemplar] = [
     Exemplar(
-        question="How many customers do we have?",
-        sql="SELECT count(*) AS customer_count FROM customers",
+        question="What share of all orders were cancelled?",
+        sql=(
+            "SELECT round(100.0 * sum(CASE WHEN orders.status = 'cancelled' THEN 1 ELSE 0 END)"
+            " / count(*), 1) AS cancelled_pct FROM orders"
+        ),
     ),
     Exemplar(
         question="How many orders are in each status?",
@@ -43,11 +46,11 @@ DEMO_EXEMPLARS: list[Exemplar] = [
         ),
     ),
     Exemplar(
-        question="What is the average order value by country?",
+        question="Which products appear in more than one order?",
         sql=(
-            "SELECT customers.country, avg(orders.total_cents) AS avg_order_cents "
-            "FROM orders JOIN customers ON customers.id = orders.customer_id "
-            "GROUP BY customers.country ORDER BY avg_order_cents DESC"
+            "SELECT products.name, count(DISTINCT order_items.order_id) AS order_count "
+            "FROM products JOIN order_items ON order_items.product_id = products.id "
+            "GROUP BY products.name HAVING count(DISTINCT order_items.order_id) > 1"
         ),
     ),
     Exemplar(

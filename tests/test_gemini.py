@@ -151,8 +151,14 @@ def test_gemini_sql_still_goes_through_guardrails(
     assert executor.executed == []
 
 
-def test_openai_compat_mode_targets_gemini_openai_endpoint(tmp_path: Path) -> None:
+def test_openai_compat_mode_targets_gemini_openai_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from text_to_sql_engine.embeddings.openai_embedder import OpenAIEmbedder
     from text_to_sql_engine.llm.openai_provider import OpenAIProvider
+
+    # Building the container embeds the few-shot exemplars; keep the test offline.
+    monkeypatch.setattr(OpenAIEmbedder, "embed", lambda self, texts: [[1.0, 0.0] for _ in texts])
 
     settings = Settings(
         database_url=None, llm_provider="gemini", gemini_api_key="k",
